@@ -38,7 +38,8 @@ function CartItem({ item, onDecrease, onIncrease, onRemove }) {
             onClick={() => onRemove(item.id)}
             type="button"
           >
-            <Trash2 aria-hidden="true" size={14} />
+            <Trash2 aria-hidden="true" size={13} />
+            <span>Remove</span>
           </button>
         </div>
         {item.isLegacy && (
@@ -60,6 +61,7 @@ function CartItem({ item, onDecrease, onIncrease, onRemove }) {
             <div aria-label={`${item.quantity} ${item.name}`} className="quantity-control">
               <button
                 aria-label={`Decrease ${item.name} quantity`}
+                disabled={item.quantity <= 1}
                 onClick={() => onDecrease(item.id)}
                 type="button"
               >

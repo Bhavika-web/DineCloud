@@ -137,11 +137,11 @@ const cartReducer = (state, action) => {
           : item
       ))
     case 'decrease':
-      return state
-        .map((item) => (
-          item.id === action.foodId ? { ...item, quantity: item.quantity - 1 } : item
-        ))
-        .filter((item) => item.quantity > 0)
+      return state.map((item) => (
+        item.id === action.foodId && item.quantity > 1
+          ? { ...item, quantity: item.quantity - 1 }
+          : item
+      ))
     case 'clear':
       return []
     case 'reconcile':

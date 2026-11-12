@@ -135,6 +135,7 @@ function CheckoutPage() {
     itemCount,
     subtotal,
     total,
+    clearCart,
     removeFromCart,
     validateCartAgainstLatestMenu,
   } = useCart()
@@ -273,6 +274,7 @@ function CheckoutPage() {
         storageWarning = 'Your order was placed, but this browser could not save the confirmation details for the next step.'
       }
       if (storageWarning) setOrderSubmissionError(storageWarning)
+      clearCart()
       navigate('/order-confirmation')
     } catch (error) {
       setOrderSubmissionError(

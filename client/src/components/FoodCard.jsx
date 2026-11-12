@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Check, Plus } from 'lucide-react'
+import { Minus, Plus, Trash2 } from 'lucide-react'
 import useCart from '../context/useCart'
 
 const formatPrice = (amount) => new Intl.NumberFormat('en-IN', {
@@ -10,21 +10,14 @@ const formatPrice = (amount) => new Intl.NumberFormat('en-IN', {
 
 function FoodCard({ food }) {
   const [imageFailed, setImageFailed] = useState(!food.image)
-  const [limitMessage, setLimitMessage] = useState(false)
-  const { addToCart, items } = useCart()
+  const {
+    addToCart,
+    decreaseQuantity,
+    increaseQuantity,
+    items,
+    removeFromCart,
+  } = useCart()
   const cartItem = items.find((item) => item.id === food.id)
-  const quantity = cartItem?.quantity || 0
-  const isAtQuantityLimit = quantity >= 10
-
-  const handleAddToCart = () => {
-    if (isAtQuantityLimit) {
-      setLimitMessage(true)
-      return
-    }
-
-    setLimitMessage(false)
-    addToCart(food)
-  }
 
   return (
     <article className="food-card">
@@ -55,17 +48,55 @@ function FoodCard({ food }) {
         <p className="food-description">{food.description}</p>
         <div className="food-card-bottom">
           <strong className="food-price">{formatPrice(food.price)}</strong>
-          <button
-            aria-label={`Add ${food.name} to cart${quantity ? `, currently ${quantity} in cart` : ''}`}
-            className={`add-button${quantity ? ' is-added' : ''}`}
-            onClick={handleAddToCart}
-            type="button"
-          >
-            {quantity ? <Check aria-hidden="true" size={16} /> : <Plus aria-hidden="true" size={16} />}
-            <span>{quantity ? `Added · ${quantity}` : 'Add to Cart'}</span>
-          </button>
+          {cartItem ? (
+            <div className="food-cart-controls">
+              <div aria-label={`${cartItem.quantity} ${food.name} in cart`} className="quantity-control food-quantity-control">
+                <button
+                  aria-label={`Decrease ${food.name} quantity`}
+                  disabled={cartItem.quantity <= 1 || cartItem.isLegacy || cartItem.isUnavailable}
+                  onClick={() => decreaseQuantity(cartItem.id)}
+                  type="button"
+                >
+                  <Minus aria-hidden="true" size={16} />
+                </button>
+                <span>{cartItem.quantity}</span>
+                <button
+                  aria-label={`Increase ${food.name} quantity`}
+                  disabled={cartItem.quantity >= 10 || cartItem.isLegacy || cartItem.isUnavailable}
+                  onClick={() => increaseQuantity(cartItem.id)}
+                  title={cartItem.quantity >= 10 ? 'Maximum 10 per item' : undefined}
+                  type="button"
+                >
+                  <Plus aria-hidden="true" size={16} />
+                </button>
+              </div>
+              <button
+                aria-label={`Remove ${food.name} from cart`}
+                className="food-remove-button"
+                onClick={() => removeFromCart(cartItem.id)}
+                type="button"
+              >
+                <Trash2 aria-hidden="true" size={16} />
+                <span className="food-remove-label">Remove</span>
+              </button>
+            </div>
+          ) : (
+            <button
+              aria-label={`Add ${food.name} to cart`}
+              className="add-button"
+              onClick={() => addToCart(food)}
+              type="button"
+            >
+              <Plus aria-hidden="true" size={16} />
+              <span>Add to Cart</span>
+            </button>
+          )}
         </div>
-        {limitMessage && <small aria-live="polite" className="quantity-limit-message">Maximum 10 per item</small>}
+        {cartItem?.isLegacy && <small className="food-cart-notice">Saved demo item · remove to checkout</small>}
+        {cartItem?.isUnavailable && <small className="food-cart-notice">Unavailable · remove to checkout</small>}
+        {cartItem && !cartItem.isLegacy && !cartItem.isUnavailable && cartItem.quantity >= 10 && (
+          <small className="quantity-limit-message">Maximum 10 per item</small>
+        )}
       </div>
     </article>
   )
