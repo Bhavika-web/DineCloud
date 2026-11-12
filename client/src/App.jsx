@@ -1,58 +1,30 @@
-import { NavLink, Route, Routes } from 'react-router-dom'
-import {
-  CheckoutPage,
-  HomePage,
-  MenuPage,
-  OrderConfirmationPage,
-  OrderTrackingPage,
-} from './pages'
+import { useState } from 'react'
+import { Route, Routes } from 'react-router-dom'
+import CartPanel from './components/CartPanel'
+import Sidebar from './components/Sidebar'
+import TopHeader from './components/TopHeader'
+import { CheckoutPage, HomePage, MenuPage, OrderConfirmationPage, OrderTrackingPage } from './pages'
 import './App.css'
 
-const navigationItems = [
-  { to: '/', label: 'Home', end: true },
-  { to: '/menu', label: 'Menu' },
-  { to: '/checkout', label: 'Checkout' },
-  { to: '/track-order', label: 'Track order' },
-]
-
 function SiteLayout() {
+  const [search, setSearch] = useState('')
+
   return (
-    <div className="site-shell">
-      <header className="site-header">
-        <NavLink className="brand" to="/" aria-label="DineCloud home">
-          <span className="brand-mark" aria-hidden="true">D</span>
-          <span className="brand-name">DineCloud</span>
-        </NavLink>
-
-        <nav className="site-nav" aria-label="Main navigation">
-          {navigationItems.map(({ to, label, end }) => (
-            <NavLink
-              className={({ isActive }) => `nav-link${isActive ? ' is-active' : ''}`}
-              end={end}
-              key={to}
-              to={to}
-            >
-              {label}
-            </NavLink>
-          ))}
-        </nav>
-      </header>
-
-      <main className="page-main">
-        <Routes>
-          <Route element={<HomePage />} path="/" />
-          <Route element={<MenuPage />} path="/menu" />
-          <Route element={<CheckoutPage />} path="/checkout" />
-          <Route element={<OrderConfirmationPage />} path="/order-confirmation" />
-          <Route element={<OrderTrackingPage />} path="/track-order" />
-          <Route element={<HomePage />} path="*" />
-        </Routes>
-      </main>
-
-      <footer className="site-footer">
-        <span className="footer-brand">DineCloud</span>
-        <span>Good food, thoughtfully delivered.</span>
-      </footer>
+    <div className="app-layout">
+      <Sidebar />
+      <div className="app-workspace">
+        <TopHeader onSearch={setSearch} search={search} />
+        <main className="main-content">
+          <Routes>
+            <Route element={<div className="dashboard-grid"><HomePage search={search} /><CartPanel /></div>} path="/" />
+            <Route element={<MenuPage />} path="/menu" />
+            <Route element={<CheckoutPage />} path="/checkout" />
+            <Route element={<OrderConfirmationPage />} path="/order-confirmation" />
+            <Route element={<OrderTrackingPage />} path="/track-order" />
+            <Route element={<div className="dashboard-grid"><HomePage search={search} /><CartPanel /></div>} path="*" />
+          </Routes>
+        </main>
+      </div>
     </div>
   )
 }
