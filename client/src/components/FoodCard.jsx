@@ -1,8 +1,12 @@
 import { useState } from 'react'
-import { Clock3, Plus, Star } from 'lucide-react'
+import { Check, Clock3, Plus, Star } from 'lucide-react'
+import useCart from '../context/useCart'
 
 function FoodCard({ food }) {
   const [imageFailed, setImageFailed] = useState(false)
+  const { addToCart, items } = useCart()
+  const cartItem = items.find((item) => item.id === food.id)
+  const quantity = cartItem?.quantity || 0
 
   return (
     <article className="food-card">
@@ -35,9 +39,14 @@ function FoodCard({ food }) {
         <p className="food-description">{food.description}</p>
         <div className="food-card-bottom">
           <strong className="food-price">₹{food.price}</strong>
-          <button aria-label={`Add ${food.name} to cart`} className="add-button" type="button">
-            <Plus aria-hidden="true" size={16} />
-            <span>Add to Cart</span>
+          <button
+            aria-label={`Add ${food.name} to cart${quantity ? `, currently ${quantity} in cart` : ''}`}
+            className={`add-button${quantity ? ' is-added' : ''}`}
+            onClick={() => addToCart(food)}
+            type="button"
+          >
+            {quantity ? <Check aria-hidden="true" size={16} /> : <Plus aria-hidden="true" size={16} />}
+            <span>{quantity ? `Added · ${quantity}` : 'Add to Cart'}</span>
           </button>
         </div>
       </div>

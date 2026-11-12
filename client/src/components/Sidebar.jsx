@@ -1,14 +1,18 @@
-import { ClipboardList, House, MapPinned, UtensilsCrossed } from 'lucide-react'
+import { ClipboardList, House, MapPinned, ShoppingBag, UtensilsCrossed } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
+import useCart from '../context/useCart'
 
 const navigationItems = [
   { to: '/', label: 'Home', icon: House, end: true },
   { to: '/menu', label: 'Menu', icon: UtensilsCrossed },
+  { to: '/checkout', label: 'My Cart', icon: ShoppingBag },
   { to: '/order-confirmation', label: 'My Orders', icon: ClipboardList },
   { to: '/track-order', label: 'Track Order', icon: MapPinned },
 ]
 
 function Sidebar() {
+  const { itemCount } = useCart()
+
   return (
     <aside className="sidebar">
       <NavLink className="sidebar-brand" to="/" aria-label="DineCloud home">
@@ -27,6 +31,11 @@ function Sidebar() {
           >
             <Icon aria-hidden="true" size={19} strokeWidth={1.8} />
             <span>{label}</span>
+            {to === '/checkout' && itemCount > 0 && (
+              <span aria-label={`${itemCount} items in cart`} className="sidebar-cart-count">
+                {itemCount}
+              </span>
+            )}
           </NavLink>
         ))}
       </nav>

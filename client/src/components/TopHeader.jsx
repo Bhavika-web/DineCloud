@@ -1,5 +1,6 @@
-import { Bell, Search, UserRound } from 'lucide-react'
-import { useLocation } from 'react-router-dom'
+import { Bell, Search, ShoppingBag, UserRound } from 'lucide-react'
+import { Link, useLocation } from 'react-router-dom'
+import useCart from '../context/useCart'
 
 const pageHeadings = {
   '/': { title: 'Good afternoon, Aarushi!', subtitle: 'What would you like to eat today?' },
@@ -11,6 +12,7 @@ const pageHeadings = {
 
 function TopHeader({ onSearch, search }) {
   const { pathname } = useLocation()
+  const { itemCount } = useCart()
   const heading = pageHeadings[pathname] || pageHeadings['/']
   const showSearch = pathname === '/' || pathname === '/menu'
 
@@ -36,6 +38,10 @@ function TopHeader({ onSearch, search }) {
             <kbd>⌘ K</kbd>
           </label>
         )}
+        <Link aria-label={`Shopping cart, ${itemCount} items`} className="icon-button header-cart-button" to="/checkout">
+          <ShoppingBag aria-hidden="true" size={18} />
+          {itemCount > 0 && <span className="header-cart-count">{itemCount}</span>}
+        </Link>
         <button aria-label="Notifications" className="icon-button notification-button" type="button">
           <Bell aria-hidden="true" size={19} />
           <span className="notification-dot" />
