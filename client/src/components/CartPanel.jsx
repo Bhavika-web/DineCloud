@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { ArrowRight, Minus, Plus, ShoppingBag, Trash2 } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import useCart from '../context/useCart'
 
 const formatPrice = (amount) => new Intl.NumberFormat('en-IN', {
@@ -13,7 +13,7 @@ function CartItem({ item, onDecrease, onIncrease, onRemove }) {
   const [imageFailed, setImageFailed] = useState(!item.image)
 
   return (
-    <article className="cart-item">
+    <article className={`cart-item${item.isLegacy ? ' is-legacy' : ''}`}>
       <div className="cart-item-image">
         {imageFailed ? (
           <span aria-label={`${item.name} image placeholder`} className="cart-item-placeholder" role="img">
@@ -41,33 +41,54 @@ function CartItem({ item, onDecrease, onIncrease, onRemove }) {
             <Trash2 aria-hidden="true" size={14} />
           </button>
         </div>
+        {item.isLegacy && (
+          <p className="legacy-cart-notice">Unavailable for checkout · Remove this saved demo item</p>
+        )}
+        {item.isUnavailable && (
+          <p className="unavailable-cart-notice">No longer available · Remove this item to continue</p>
+        )}
         <p className="cart-item-price">{formatPrice(item.price)} each</p>
+        {item.priceChanged && (
+          <p className="cart-price-change-notice">
+            Price updated from {formatPrice(item.previousPrice)} to {formatPrice(item.price)}
+          </p>
+        )}
         <div className="cart-item-bottom">
-          <div aria-label={`${item.quantity} ${item.name}`} className="quantity-control">
-            <button
-              aria-label={`Decrease ${item.name} quantity`}
-              onClick={() => onDecrease(item.id)}
-              type="button"
-            >
-              <Minus aria-hidden="true" size={12} />
-            </button>
-            <span>{item.quantity}</span>
-            <button
-              aria-label={`Increase ${item.name} quantity`}
-              onClick={() => onIncrease(item.id)}
-              type="button"
-            >
-              <Plus aria-hidden="true" size={12} />
-            </button>
-          </div>
+          {item.isLegacy || item.isUnavailable ? (
+            <span className="legacy-cart-quantity">Saved quantity: {item.quantity}</span>
+          ) : (
+            <div aria-label={`${item.quantity} ${item.name}`} className="quantity-control">
+              <button
+                aria-label={`Decrease ${item.name} quantity`}
+                onClick={() => onDecrease(item.id)}
+                type="button"
+              >
+                <Minus aria-hidden="true" size={12} />
+              </button>
+              <span>{item.quantity}</span>
+              <button
+                aria-label={`Increase ${item.name} quantity`}
+                disabled={item.quantity >= 10}
+                onClick={() => onIncrease(item.id)}
+                title={item.quantity >= 10 ? 'Maximum 10 per item' : undefined}
+                type="button"
+              >
+                <Plus aria-hidden="true" size={12} />
+              </button>
+            </div>
+          )}
           <strong className="cart-line-total">{formatPrice(item.price * item.quantity)}</strong>
         </div>
+        {item.quantity >= 10 && <small className="quantity-limit-message">Maximum 10 per item</small>}
       </div>
     </article>
   )
 }
 
 function CartPanel() {
+  const navigate = useNavigate()
+  const [checkingMenu, setCheckingMenu] = useState(false)
+  const [menuCheckMessage, setMenuCheckMessage] = useState('')
   const {
     clearCart,
     decreaseQuantity,
@@ -77,7 +98,32 @@ function CartPanel() {
     removeFromCart,
     subtotal,
     total,
+    validateCartAgainstLatestMenu,
   } = useCart()
+  const hasLegacyItems = items.some((item) => item.isLegacy)
+  const hasUnavailableItems = items.some((item) => item.isUnavailable)
+  const checkoutBlocked = hasLegacyItems
+
+  const handleCheckout = async () => {
+    setCheckingMenu(true)
+    setMenuCheckMessage('')
+    try {
+      const result = await validateCartAgainstLatestMenu()
+      if (result.priceChangedItems.length > 0) {
+        setMenuCheckMessage('Menu prices changed. Review the updated prices and total, then select checkout again.')
+      } else if (result.hasUnavailableItems) {
+        setMenuCheckMessage('Some items are no longer available. Remove them individually before checkout.')
+      } else if (result.hasLegacyItems) {
+        setMenuCheckMessage('Remove saved demo items before checkout.')
+      } else {
+        navigate('/checkout')
+      }
+    } catch {
+      setMenuCheckMessage('We could not refresh the menu. Check your connection and try again.')
+    } finally {
+      setCheckingMenu(false)
+    }
+  }
 
   return (
     <aside aria-label="Shopping cart" className="cart-panel">
@@ -124,15 +170,19 @@ function CartPanel() {
       <div className="cart-summary">
         <div><span>Subtotal</span><strong>{formatPrice(subtotal)}</strong></div>
         <div className="cart-total"><span>Total</span><strong>{formatPrice(total)}</strong></div>
-        {items.length > 0 ? (
-          <Link className="checkout-button is-enabled" to="/checkout">
-            Go to Checkout <ArrowRight aria-hidden="true" size={17} />
-          </Link>
-        ) : (
-          <button className="checkout-button" disabled type="button">
-            Go to Checkout <ArrowRight aria-hidden="true" size={17} />
-          </button>
+        <button
+          className={`checkout-button${items.length > 0 && !checkoutBlocked ? ' is-enabled' : ''}`}
+          disabled={items.length === 0 || checkoutBlocked || checkingMenu}
+          onClick={handleCheckout}
+          type="button"
+        >
+          {checkingMenu ? 'Checking latest menu…' : 'Go to Checkout'}
+          {!checkingMenu && <ArrowRight aria-hidden="true" size={17} />}
+        </button>
+        {(hasLegacyItems || hasUnavailableItems) && (
+          <p className="legacy-checkout-blocked">Remove unavailable items before checkout.</p>
         )}
+        {menuCheckMessage && <p className="menu-check-message" role="status">{menuCheckMessage}</p>}
         <p className="cart-footnote">Payment options available at checkout</p>
       </div>
     </aside>

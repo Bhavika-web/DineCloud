@@ -1,7 +1,13 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, Banknote, CheckCircle2, CreditCard, MapPin, QrCode, ShieldCheck } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
+import http from '../api/http'
 import useCart from '../context/useCart'
+
+const PENDING_ORDER_STORAGE_KEY = 'dinecloud-pending-order-confirmation'
+const IDEMPOTENCY_STORAGE_KEY = 'dinecloud-checkout-idempotency'
+const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._~-]{8,128}$/
+const FINGERPRINT_PATTERN = /^[a-f\d]{64}$/
 
 const paymentOptions = [
   { value: 'Cash', description: 'Pay when your order arrives', icon: Banknote },
@@ -32,8 +38,112 @@ const validateForm = (form) => {
   return errors
 }
 
+const createOrderPayload = (form, items) => {
+  const customer = {
+    name: form.name.trim(),
+    phone: form.phone.trim(),
+  }
+  if (form.email.trim()) customer.email = form.email.trim()
+
+  return {
+    customer,
+    items: items.map((item) => ({
+      menuItemId: item._id.toLowerCase(),
+      quantity: item.quantity,
+    })),
+    address: form.address.trim(),
+    paymentMethod: form.paymentMethod,
+  }
+}
+
+const createIdempotencyKey = () => {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
+  if (!globalThis.crypto?.getRandomValues) {
+    throw new Error('Secure order request keys are not supported by this browser.')
+  }
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16))
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+const createPayloadFingerprint = async (payload) => {
+  if (!globalThis.crypto?.subtle) {
+    throw new Error('Secure order retry storage is not supported by this browser.')
+  }
+  const serializedPayload = JSON.stringify(payload)
+  const digest = await globalThis.crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(serializedPayload),
+  )
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+const readStoredIdempotencyAttempt = () => {
+  const storedValue = sessionStorage.getItem(IDEMPOTENCY_STORAGE_KEY)
+  if (!storedValue) return null
+
+  try {
+    const storedAttempt = JSON.parse(storedValue)
+    if (
+      storedAttempt !== null &&
+      typeof storedAttempt === 'object' &&
+      !Array.isArray(storedAttempt) &&
+      Object.keys(storedAttempt).length === 2 &&
+      typeof storedAttempt.key === 'string' &&
+      typeof storedAttempt.fingerprint === 'string' &&
+      IDEMPOTENCY_KEY_PATTERN.test(storedAttempt.key) &&
+      FINGERPRINT_PATTERN.test(storedAttempt.fingerprint)
+    ) {
+      return storedAttempt
+    }
+  } catch {
+    // Replace malformed or outdated retry state with a fresh attempt.
+  }
+
+  sessionStorage.removeItem(IDEMPOTENCY_STORAGE_KEY)
+  return null
+}
+
+const persistIdempotencyAttempt = (attempt) => {
+  sessionStorage.setItem(IDEMPOTENCY_STORAGE_KEY, JSON.stringify({
+    key: attempt.key,
+    fingerprint: attempt.fingerprint,
+  }))
+}
+
+const getOrderErrorMessage = (error) => {
+  const status = error.response?.status
+  const serverMessage = error.response?.data?.message
+  if (status === 400) {
+    return serverMessage || 'The order details were rejected. Review the form and cart, then try again.'
+  }
+  if (status === 409) {
+    return serverMessage || 'This order request is already being processed. Retry without changing your order.'
+  }
+  if (status === 429) {
+    return serverMessage || 'Too many order attempts. Please wait a little before trying again.'
+  }
+  if (status >= 500) {
+    return 'The order service is temporarily unavailable. Retry safely; your request may have been received.'
+  }
+  return 'We could not reach the order service. Check your connection and retry safely.'
+}
+
 function CheckoutPage() {
-  const { items, itemCount, subtotal, total } = useCart()
+  const navigate = useNavigate()
+  const {
+    items,
+    itemCount,
+    subtotal,
+    total,
+    removeFromCart,
+    validateCartAgainstLatestMenu,
+  } = useCart()
+  const hasLegacyItems = items.some((item) => item.isLegacy)
+  const hasUnavailableItems = items.some((item) => item.isUnavailable)
+  const [menuCheckStatus, setMenuCheckStatus] = useState('checking')
+  const [menuCheckError, setMenuCheckError] = useState('')
+  const [pricesWereUpdated, setPricesWereUpdated] = useState(false)
+  const initialCartHasItems = useRef(items.length > 0)
   const [form, setForm] = useState({
     name: '',
     phone: '',
@@ -43,18 +153,137 @@ function CheckoutPage() {
   })
   const [errors, setErrors] = useState({})
   const [showNextStageMessage, setShowNextStageMessage] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [orderSubmissionError, setOrderSubmissionError] = useState('')
+  const [submittedOrder, setSubmittedOrder] = useState(null)
+  const submissionLock = useRef(false)
+  const idempotencyAttempt = useRef(null)
+  const orderPayload = createOrderPayload(form, items.filter((item) => (
+    !item.isLegacy &&
+    !item.isUnavailable &&
+    typeof item._id === 'string' &&
+    /^[a-f\d]{24}$/i.test(item._id) &&
+    item.id?.toLowerCase() === item._id.toLowerCase()
+  )))
+
+  const runMenuCheck = useCallback(async ({ reuseRecent = false } = {}) => {
+    setMenuCheckStatus('checking')
+    setMenuCheckError('')
+    try {
+      const result = await validateCartAgainstLatestMenu({ reuseRecent })
+      setPricesWereUpdated(result.priceChangedItems.length > 0)
+      setMenuCheckStatus('ready')
+    } catch {
+      setMenuCheckError('We could not refresh the menu. Check your connection and retry before continuing.')
+      setMenuCheckStatus('error')
+    }
+  }, [validateCartAgainstLatestMenu])
+
+  useEffect(() => {
+    if (!initialCartHasItems.current) return
+    let active = true
+    validateCartAgainstLatestMenu({ reuseRecent: true })
+      .then((result) => {
+        if (!active) return
+        setPricesWereUpdated(result.priceChangedItems.length > 0)
+        setMenuCheckStatus('ready')
+      })
+      .catch(() => {
+        if (!active) return
+        setMenuCheckError('We could not refresh the menu. Check your connection and retry before continuing.')
+        setMenuCheckStatus('error')
+      })
+
+    return () => {
+      active = false
+    }
+  }, [validateCartAgainstLatestMenu])
 
   const updateField = (field, value) => {
+    if (submissionLock.current) return
+    idempotencyAttempt.current = null
     setForm((currentForm) => ({ ...currentForm, [field]: value }))
     setErrors((currentErrors) => ({ ...currentErrors, [field]: undefined }))
     setShowNextStageMessage(false)
+    setOrderSubmissionError('')
   }
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault()
+    if (submissionLock.current || submittedOrder) return
+    setOrderSubmissionError('')
+    if (menuCheckStatus !== 'ready' || hasLegacyItems || hasUnavailableItems) {
+      setShowNextStageMessage(false)
+      setOrderSubmissionError('Remove legacy or unavailable cart items before placing your order.')
+      return
+    }
     const formErrors = validateForm(form)
     setErrors(formErrors)
-    setShowNextStageMessage(Object.keys(formErrors).length === 0)
+    if (Object.keys(formErrors).length > 0) {
+      setShowNextStageMessage(false)
+      return
+    }
+    if (orderPayload.items.length === 0 || orderPayload.items.length !== items.length) {
+      setOrderSubmissionError('Some cart items are not valid menu items. Remove them before placing your order.')
+      return
+    }
+
+    submissionLock.current = true
+    setIsSubmitting(true)
+    setShowNextStageMessage(false)
+    try {
+      const fingerprint = await createPayloadFingerprint(orderPayload)
+      const storedAttempt = readStoredIdempotencyAttempt()
+      if (storedAttempt?.fingerprint === fingerprint) {
+        idempotencyAttempt.current = storedAttempt
+      } else {
+        idempotencyAttempt.current = { fingerprint, key: createIdempotencyKey() }
+        persistIdempotencyAttempt(idempotencyAttempt.current)
+      }
+
+      const { data } = await http.post('/orders', orderPayload, {
+        headers: { 'Idempotency-Key': idempotencyAttempt.current.key },
+      })
+      if (
+        !data ||
+        !data.order ||
+        typeof data.order !== 'object' ||
+        typeof data.trackingId !== 'string' ||
+        typeof data.trackingToken !== 'string'
+      ) {
+        throw new Error('The order service returned an unexpected response. Retry safely.')
+      }
+
+      const orderResult = {
+        order: data.order,
+        trackingId: data.trackingId,
+        trackingToken: data.trackingToken,
+      }
+      setSubmittedOrder(orderResult)
+      idempotencyAttempt.current = null
+      let storageWarning = ''
+      try {
+        sessionStorage.removeItem(IDEMPOTENCY_STORAGE_KEY)
+      } catch {
+        storageWarning = 'Your order was placed, but the pending retry key could not be removed from this browser.'
+      }
+      try {
+        sessionStorage.setItem(PENDING_ORDER_STORAGE_KEY, JSON.stringify(orderResult))
+      } catch {
+        storageWarning = 'Your order was placed, but this browser could not save the confirmation details for the next step.'
+      }
+      if (storageWarning) setOrderSubmissionError(storageWarning)
+      navigate('/order-confirmation')
+    } catch (error) {
+      setOrderSubmissionError(
+        error.response || error.isAxiosError
+          ? getOrderErrorMessage(error)
+          : error.message || getOrderErrorMessage(error),
+      )
+    } finally {
+      submissionLock.current = false
+      setIsSubmitting(false)
+    }
   }
 
   if (items.length === 0) {
@@ -84,6 +313,31 @@ function CheckoutPage() {
 
       <div className="checkout-layout">
         <form className="checkout-form" noValidate onSubmit={handleSubmit}>
+          {orderSubmissionError && (
+            <div className={`order-submission-message${submittedOrder ? ' is-warning' : ''}`} role="alert">
+              {orderSubmissionError}
+            </div>
+          )}
+          {menuCheckStatus === 'checking' && (
+            <div className="menu-check-notice" role="status">Checking current menu prices and availability…</div>
+          )}
+          {menuCheckError && (
+            <div className="menu-check-error" role="alert">
+              <span>{menuCheckError}</span>
+              <button onClick={() => runMenuCheck()} type="button">Retry</button>
+            </div>
+          )}
+          {(hasLegacyItems || hasUnavailableItems) && (
+            <div className="legacy-checkout-warning" role="alert">
+              <strong>Some cart items are unavailable.</strong>
+              <span>Remove each legacy or unavailable item from the order summary before continuing.</span>
+            </div>
+          )}
+          {pricesWereUpdated && (
+            <div className="menu-price-updated-notice" role="status">
+              One or more menu prices changed. The cart and total now use the latest prices shown in your summary.
+            </div>
+          )}
           <section aria-labelledby="customer-details-title" className="checkout-card">
             <div className="checkout-section-heading">
               <span className="checkout-step">01</span>
@@ -195,10 +449,23 @@ function CheckoutPage() {
           </section>
 
           <div className="checkout-submit-area">
-            <button className="place-order-button" type="submit">
-              Continue to Place Order <ArrowRight aria-hidden="true" size={17} />
+            <button
+              className="place-order-button"
+              disabled={
+                menuCheckStatus !== 'ready' ||
+                hasLegacyItems ||
+                hasUnavailableItems ||
+                isSubmitting ||
+                Boolean(submittedOrder)
+              }
+              type="submit"
+            >
+              {isSubmitting ? 'Placing your order…' : submittedOrder ? 'Order placed' : 'Place Order'}
+              {!isSubmitting && !submittedOrder && <ArrowRight aria-hidden="true" size={17} />}
             </button>
-            <p className="checkout-secure-note"><ShieldCheck aria-hidden="true" size={14} /> Your details stay safe with us</p>
+            {!submittedOrder && (
+              <p className="checkout-secure-note"><ShieldCheck aria-hidden="true" size={14} /> Your details stay safe with us</p>
+            )}
             {showNextStageMessage && (
               <p className="next-stage-message" role="status">
                 <CheckCircle2 aria-hidden="true" size={17} />
@@ -230,8 +497,29 @@ function CheckoutPage() {
                 <div className="checkout-summary-item-copy">
                   <strong>{item.name}</strong>
                   <span>Qty {item.quantity} · {formatPrice(item.price)} each</span>
+                  {item.priceChanged && (
+                    <small className="menu-price-updated-line">
+                      Price updated from {formatPrice(item.previousPrice)} to {formatPrice(item.price)}
+                    </small>
+                  )}
+                  {(item.isLegacy || item.isUnavailable) && (
+                    <small className="legacy-summary-notice">
+                      {item.isLegacy ? 'Saved demo item · unavailable for checkout' : 'No longer available'}
+                    </small>
+                  )}
                 </div>
-                <strong className="checkout-summary-line-total">{formatPrice(item.price * item.quantity)}</strong>
+                <div className="checkout-summary-item-actions">
+                  <strong className="checkout-summary-line-total">{formatPrice(item.price * item.quantity)}</strong>
+                  {(item.isLegacy || item.isUnavailable) && (
+                    <button
+                      className="legacy-remove-button"
+                      onClick={() => removeFromCart(item.id)}
+                      type="button"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>

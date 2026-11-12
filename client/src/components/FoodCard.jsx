@@ -10,9 +10,21 @@ const formatPrice = (amount) => new Intl.NumberFormat('en-IN', {
 
 function FoodCard({ food }) {
   const [imageFailed, setImageFailed] = useState(!food.image)
+  const [limitMessage, setLimitMessage] = useState(false)
   const { addToCart, items } = useCart()
   const cartItem = items.find((item) => item.id === food.id)
   const quantity = cartItem?.quantity || 0
+  const isAtQuantityLimit = quantity >= 10
+
+  const handleAddToCart = () => {
+    if (isAtQuantityLimit) {
+      setLimitMessage(true)
+      return
+    }
+
+    setLimitMessage(false)
+    addToCart(food)
+  }
 
   return (
     <article className="food-card">
@@ -46,13 +58,14 @@ function FoodCard({ food }) {
           <button
             aria-label={`Add ${food.name} to cart${quantity ? `, currently ${quantity} in cart` : ''}`}
             className={`add-button${quantity ? ' is-added' : ''}`}
-            onClick={() => addToCart(food)}
+            onClick={handleAddToCart}
             type="button"
           >
             {quantity ? <Check aria-hidden="true" size={16} /> : <Plus aria-hidden="true" size={16} />}
             <span>{quantity ? `Added · ${quantity}` : 'Add to Cart'}</span>
           </button>
         </div>
+        {limitMessage && <small aria-live="polite" className="quantity-limit-message">Maximum 10 per item</small>}
       </div>
     </article>
   )
