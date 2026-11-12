@@ -1,9 +1,15 @@
 import { useState } from 'react'
-import { Check, Clock3, Plus, Star } from 'lucide-react'
+import { Check, Plus } from 'lucide-react'
 import useCart from '../context/useCart'
 
+const formatPrice = (amount) => new Intl.NumberFormat('en-IN', {
+  style: 'currency',
+  currency: 'INR',
+  maximumFractionDigits: 0,
+}).format(amount)
+
 function FoodCard({ food }) {
-  const [imageFailed, setImageFailed] = useState(false)
+  const [imageFailed, setImageFailed] = useState(!food.image)
   const { addToCart, items } = useCart()
   const cartItem = items.find((item) => item.id === food.id)
   const quantity = cartItem?.quantity || 0
@@ -16,7 +22,7 @@ function FoodCard({ food }) {
           className={`food-image-placeholder placeholder-${food.category.toLowerCase()}`}
           role={imageFailed ? 'img' : undefined}
         >
-          <span aria-hidden="true">{food.emoji}</span>
+          <span aria-hidden="true">{food.emoji || '🍽️'}</span>
         </div>
         {!imageFailed && (
           <img
@@ -27,18 +33,16 @@ function FoodCard({ food }) {
             src={food.image}
           />
         )}
-        {food.tag && <span className="food-tag">{food.tag}</span>}
-        <span className="food-time"><Clock3 aria-hidden="true" size={13} /> {food.time}</span>
+        <span className="food-tag">{food.category}</span>
       </div>
 
       <div className="food-card-content">
         <div className="food-title-row">
           <h3>{food.name}</h3>
-          <span className="food-rating"><Star aria-hidden="true" size={13} fill="currentColor" /> {food.rating}</span>
         </div>
         <p className="food-description">{food.description}</p>
         <div className="food-card-bottom">
-          <strong className="food-price">₹{food.price}</strong>
+          <strong className="food-price">{formatPrice(food.price)}</strong>
           <button
             aria-label={`Add ${food.name} to cart${quantity ? `, currently ${quantity} in cart` : ''}`}
             className={`add-button${quantity ? ' is-added' : ''}`}
