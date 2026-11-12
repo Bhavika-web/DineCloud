@@ -1,0 +1,5 @@
+export { default as CheckoutPage } from './CheckoutPage'
+export { default as HomePage } from './HomePage'
+export { default as MenuPage } from './MenuPage'
+export { default as OrderConfirmationPage } from './OrderConfirmationPage'
+export { default as OrderTrackingPage } from './OrderTrackingPage'
