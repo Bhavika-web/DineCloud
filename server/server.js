@@ -5,10 +5,14 @@ const mongoose = require('mongoose')
 const connectDB = require('./config/db')
 const menuRoutes = require('./routes/menuRoutes')
 const orderRoutes = require('./routes/orderRoutes')
+const Order = require('./models/Order')
+const IdempotencyRecord = require('./models/IdempotencyRecord')
 
 dotenv.config()
 
 const app = express()
+
+app.set('trust proxy', 1)
 
 const parseAllowedOrigins = () => {
   const configuredOrigins = process.env.CLIENT_URLS || process.env.CLIENT_URL || ''
@@ -91,7 +95,7 @@ app.use((error, req, res, next) => {
     return res.status(409).json({ message: 'A record with the provided value already exists.' })
   }
 
-  console.error(`Request failed: ${error.message}`)
+  console.error('Request failed.', { name: error.name, code: error.code })
   return res.status(500).json({ message: 'An internal server error occurred.' })
 })
 
@@ -100,6 +104,7 @@ const startServer = async () => {
     const configuredOrigins = validateEnvironment()
     configuredOrigins.forEach((origin) => allowedOrigins.add(origin))
     await connectDB()
+    await Promise.all([Order.init(), IdempotencyRecord.init()])
 
     const port = process.env.PORT || 5000
     const server = app.listen(port, () => {
@@ -110,7 +115,16 @@ const startServer = async () => {
       process.exitCode = 1
     })
   } catch (error) {
-    console.error(`Server startup failed: ${error.message}`)
+    const safeStartupMessages = [
+      'MONGO_URI is required. Set it in the server environment.',
+      'JWT_SECRET must be set to a secret at least 32 characters long.',
+      'CLIENT_URLS must contain valid frontend origins.',
+      'CLIENT_URLS must contain exact http(s) origins without paths or credentials.',
+    ]
+    const safeMessage = safeStartupMessages.includes(error.message)
+      ? error.message
+      : 'Database connection or index initialization failed.'
+    console.error(`Server startup failed: ${safeMessage}`)
     process.exitCode = 1
   }
 }

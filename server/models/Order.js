@@ -85,8 +85,25 @@ const orderSchema = new mongoose.Schema(
       default: 'Placed',
       trim: true,
     },
+    idempotencyOperationId: {
+      type: String,
+      select: false,
+    },
   },
-  { timestamps: true },
+  {
+    timestamps: true,
+    toJSON: {
+      transform: (document, result) => {
+        delete result.idempotencyOperationId
+        return result
+      },
+    },
+  },
+)
+
+orderSchema.index(
+  { idempotencyOperationId: 1 },
+  { unique: true, sparse: true },
 )
 
 module.exports = mongoose.models.Order || mongoose.model('Order', orderSchema)

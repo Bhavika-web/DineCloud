@@ -3,10 +3,15 @@ const jwt = require('jsonwebtoken')
 const mongoose = require('mongoose')
 const MenuItem = require('../models/MenuItem')
 const Order = require('../models/Order')
+const IdempotencyRecord = require('../models/IdempotencyRecord')
 
-const idempotencyEntries = new Map()
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000
-const MAX_IDEMPOTENCY_ENTRIES = 1000
+const MAX_NAME_LENGTH = 100
+const MAX_EMAIL_LENGTH = 254
+const MAX_ADDRESS_LENGTH = 500
+const MAX_ORDER_ITEMS = 20
+const MAX_ITEM_QUANTITY = 10
+const PAYMENT_METHODS = new Set(['Cash', 'UPI/QR', 'Card'])
 const requestFields = new Set(['customer', 'items', 'address', 'paymentMethod'])
 
 const validateOrderInput = (body) => {
@@ -30,31 +35,50 @@ const validateOrderInput = (body) => {
     return { error: `Unsupported customer field: ${unsupportedCustomerField}.` }
   }
 
-  const normalizedCustomer = {}
-  for (const field of ['name', 'phone']) {
-    if (typeof customer[field] !== 'string' || customer[field].trim().length === 0) {
-      return { error: `customer.${field} must be a non-empty string.` }
-    }
-    normalizedCustomer[field] = customer[field].trim()
+  if (typeof customer.name !== 'string' || customer.name.trim().length === 0) {
+    return { error: 'customer.name must be a non-empty string.' }
   }
-  if (customer.email !== undefined) {
-    if (
-      typeof customer.email !== 'string' ||
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customer.email.trim())
-    ) {
-      return { error: 'customer.email must be a valid email address.' }
-    }
-    normalizedCustomer.email = customer.email.trim().toLowerCase()
+  const name = customer.name.trim()
+  if (name.length > MAX_NAME_LENGTH) {
+    return { error: `customer.name must not exceed ${MAX_NAME_LENGTH} characters.` }
   }
 
-  if (typeof address !== 'string' || address.trim().length === 0) {
-    return { error: 'address must be a non-empty string.' }
+  if (typeof customer.phone !== 'string' || !/^[6-9]\d{9}$/.test(customer.phone)) {
+    return { error: 'customer.phone must be a valid 10-digit Indian mobile number.' }
   }
-  if (typeof paymentMethod !== 'string' || paymentMethod.trim().length === 0) {
-    return { error: 'paymentMethod must be a non-empty string.' }
+
+  const normalizedCustomer = { name, phone: customer.phone }
+  if (customer.email !== undefined && customer.email !== null) {
+    if (typeof customer.email !== 'string') {
+      return { error: 'customer.email must be a valid email address.' }
+    }
+    const email = customer.email.trim()
+    if (email) {
+      if (
+        email.length > MAX_EMAIL_LENGTH ||
+        !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+      ) {
+        return { error: 'customer.email must be a valid email address of at most 254 characters.' }
+      }
+      normalizedCustomer.email = email.toLowerCase()
+    }
+  }
+
+  if (
+    typeof address !== 'string' ||
+    address.trim().length === 0 ||
+    address.trim().length > MAX_ADDRESS_LENGTH
+  ) {
+    return { error: `address must be non-empty and no longer than ${MAX_ADDRESS_LENGTH} characters.` }
+  }
+  if (typeof paymentMethod !== 'string' || !PAYMENT_METHODS.has(paymentMethod)) {
+    return { error: 'paymentMethod must be Cash, UPI/QR, or Card.' }
   }
   if (!Array.isArray(items) || items.length === 0) {
     return { error: 'Order must contain at least one item.' }
+  }
+  if (items.length > MAX_ORDER_ITEMS) {
+    return { error: `An order may contain at most ${MAX_ORDER_ITEMS} distinct items.` }
   }
 
   const normalizedItems = []
@@ -69,11 +93,19 @@ const validateOrderInput = (body) => {
     if (unsupportedItemField) {
       return { error: `Unsupported field in items[${index}]: ${unsupportedItemField}.` }
     }
-    if (typeof item.menuItemId !== 'string' || !/^[a-f\d]{24}$/i.test(item.menuItemId)) {
+    if (
+      typeof item.menuItemId !== 'string' ||
+      !/^[a-f\d]{24}$/i.test(item.menuItemId) ||
+      !mongoose.isValidObjectId(item.menuItemId)
+    ) {
       return { error: `items[${index}].menuItemId must be a valid menu item ID.` }
     }
-    if (!Number.isSafeInteger(item.quantity) || item.quantity <= 0) {
-      return { error: `items[${index}].quantity must be a positive integer.` }
+    if (
+      !Number.isSafeInteger(item.quantity) ||
+      item.quantity <= 0 ||
+      item.quantity > MAX_ITEM_QUANTITY
+    ) {
+      return { error: `items[${index}].quantity must be an integer from 1 to ${MAX_ITEM_QUANTITY}.` }
     }
 
     const menuItemId = item.menuItemId.toLowerCase()
@@ -89,29 +121,66 @@ const validateOrderInput = (body) => {
       customer: normalizedCustomer,
       items: normalizedItems,
       address: address.trim(),
-      paymentMethod: paymentMethod.trim(),
+      paymentMethod,
     },
   }
 }
 
-const pruneIdempotencyEntries = (now) => {
-  for (const [key, entry] of idempotencyEntries) {
-    if (!entry.pending && entry.expiresAt <= now) {
-      idempotencyEntries.delete(key)
+const createIdempotencyConflict = (message) => Object.assign(new Error(message), { status: 409 })
+
+const claimIdempotencyRecord = async (keyHash, requestHash) => {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const now = new Date()
+    let record = await IdempotencyRecord.findOne({ keyHash })
+
+    if (!record) {
+      try {
+        record = await IdempotencyRecord.create({
+          keyHash,
+          requestHash,
+          operationId: crypto.randomUUID(),
+          status: 'processing',
+          expiresAt: new Date(now.getTime() + IDEMPOTENCY_TTL_MS),
+        })
+        return record
+      } catch (error) {
+        if (error.code !== 11000) throw error
+        continue
+      }
     }
+
+    if (record.expiresAt <= now) {
+      const replacement = await IdempotencyRecord.findOneAndUpdate(
+        { _id: record._id, expiresAt: { $lte: now } },
+        {
+          $set: {
+            requestHash,
+            operationId: crypto.randomUUID(),
+            orderId: null,
+            status: 'processing',
+            expiresAt: new Date(now.getTime() + IDEMPOTENCY_TTL_MS),
+          },
+        },
+        { new: true, runValidators: true },
+      )
+      if (replacement) return replacement
+      continue
+    }
+
+    if (record.requestHash !== requestHash) {
+      throw createIdempotencyConflict('Idempotency-Key has already been used for a different order.')
+    }
+    return record
   }
 
-  while (idempotencyEntries.size >= MAX_IDEMPOTENCY_ENTRIES) {
-    const oldestKey = idempotencyEntries.keys().next().value
-    const oldestEntry = idempotencyEntries.get(oldestKey)
-    if (oldestEntry.pending) {
-      break
-    }
-    idempotencyEntries.delete(oldestKey)
-  }
+  throw createIdempotencyConflict('This order request is being processed. Retry with the same Idempotency-Key.')
 }
 
-const createOrder = async (data) => {
+// The unique operation ID on Order makes creation recoverable without a multi-document transaction.
+const createOrFindOrder = async (data, operationId) => {
+  const existingOrder = await Order.findOne({ idempotencyOperationId: operationId })
+  if (existingOrder) return { order: existingOrder, created: false }
+
   const menuItemIds = data.items.map((item) => new mongoose.Types.ObjectId(item.menuItemId))
   const menuItems = await MenuItem.find({
     _id: { $in: menuItemIds },
@@ -138,25 +207,50 @@ const createOrder = async (data) => {
     (total, item) => total + item.price * item.quantity,
     0,
   )
+  if (!Number.isFinite(totalAmount)) {
+    throw Object.assign(new Error('Order total is invalid.'), { status: 400 })
+  }
 
-  const order = await Order.create({
-    customer: data.customer,
-    items: orderItems,
-    totalAmount,
-    address: data.address,
-    paymentMethod: data.paymentMethod,
-    status: 'Placed',
-  })
-  const trackingToken = jwt.sign(
+  try {
+    const order = await Order.create({
+      customer: data.customer,
+      items: orderItems,
+      totalAmount,
+      address: data.address,
+      paymentMethod: data.paymentMethod,
+      status: 'Placed',
+      idempotencyOperationId: operationId,
+    })
+    return { order, created: true }
+  } catch (error) {
+    if (error.code !== 11000) throw error
+    const duplicateOrder = await Order.findOne({ idempotencyOperationId: operationId })
+    if (!duplicateOrder) throw error
+    return { order: duplicateOrder, created: false }
+  }
+}
+
+const createOrderResponse = (order) => ({
+  order,
+  trackingId: String(order._id),
+  trackingToken: jwt.sign(
     { orderId: String(order._id), purpose: 'order-tracking' },
     process.env.JWT_SECRET,
     { expiresIn: '7d' },
-  )
-
-  return { order, trackingId: String(order._id), trackingToken }
-}
+  ),
+})
 
 const placeOrder = async (req, res, next) => {
+  const idempotencyKey = req.get('Idempotency-Key')
+  if (
+    typeof idempotencyKey !== 'string' ||
+    !/^[A-Za-z0-9._~-]{8,128}$/.test(idempotencyKey)
+  ) {
+    return res.status(400).json({
+      message: 'Idempotency-Key is required and must be 8-128 URL-safe characters.',
+    })
+  }
+
   const validation = validateOrderInput(req.body)
   if (validation.error) {
     return res.status(400).json({ message: validation.error })
@@ -165,53 +259,35 @@ const placeOrder = async (req, res, next) => {
     return res.status(500).json({ message: 'Order tracking is not configured.' })
   }
 
-  const idempotencyKey = req.get('Idempotency-Key')
-  if (
-    idempotencyKey !== undefined &&
-    (idempotencyKey.length === 0 || idempotencyKey.length > 128 || /[\r\n]/.test(idempotencyKey))
-  ) {
-    return res.status(400).json({ message: 'Idempotency-Key must be 1-128 characters.' })
-  }
-
   const data = validation.data
-  const fingerprint = crypto.createHash('sha256').update(JSON.stringify(data)).digest('hex')
+  const keyHash = crypto.createHash('sha256').update(idempotencyKey).digest('hex')
+  const requestHash = crypto.createHash('sha256').update(JSON.stringify(data)).digest('hex')
 
   try {
-    if (idempotencyKey) {
-      pruneIdempotencyEntries(Date.now())
-      const existing = idempotencyEntries.get(idempotencyKey)
-      if (existing) {
-        if (existing.fingerprint !== fingerprint) {
-          return res.status(409).json({
-            message: 'Idempotency-Key has already been used for a different order.',
-          })
-        }
-        const result = await existing.promise
-        return res.status(200).json(result)
+    const record = await claimIdempotencyRecord(keyHash, requestHash)
+    if (record.status === 'completed') {
+      const order = await Order.findById(record.orderId)
+      if (!order) {
+        return res.status(500).json({ message: 'An internal server error occurred.' })
       }
-
-      const entry = {
-        fingerprint,
-        pending: true,
-        expiresAt: Date.now() + IDEMPOTENCY_TTL_MS,
-      }
-      entry.promise = createOrder(data)
-      idempotencyEntries.set(idempotencyKey, entry)
-      try {
-        const result = await entry.promise
-        entry.pending = false
-        return res.status(201).json(result)
-      } catch (error) {
-        idempotencyEntries.delete(idempotencyKey)
-        throw error
-      }
+      return res.status(200).json(createOrderResponse(order))
     }
 
-    const result = await createOrder(data)
-    return res.status(201).json(result)
+    const { order, created } = await createOrFindOrder(data, record.operationId)
+    await IdempotencyRecord.updateOne(
+      {
+        _id: record._id,
+        keyHash,
+        requestHash,
+        operationId: record.operationId,
+        expiresAt: { $gt: new Date() },
+      },
+      { $set: { orderId: order._id, status: 'completed' } },
+    )
+    return res.status(created ? 201 : 200).json(createOrderResponse(order))
   } catch (error) {
-    if (error.status === 400) {
-      return res.status(400).json({ message: error.message })
+    if (error.status === 400 || error.status === 409) {
+      return res.status(error.status).json({ message: error.message })
     }
     return next(error)
   }

@@ -5,7 +5,7 @@ const connectDB = async () => {
 
   if (!mongoUri) {
     const error = new Error('MONGO_URI is not set. Add it to the server environment.')
-    console.error(`MongoDB connection failed: ${error.message}`)
+    console.error('MongoDB connection failed: MONGO_URI is not configured.')
     throw error
   }
 
@@ -14,7 +14,7 @@ const connectDB = async () => {
     console.log(`MongoDB connected: ${connection.connection.host}`)
     return connection
   } catch (error) {
-    console.error(`MongoDB connection failed: ${error.message}`)
+    console.error('MongoDB connection failed.', { name: error.name, code: error.code })
     throw error
   }
 }
