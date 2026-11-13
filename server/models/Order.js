@@ -1,3 +1,4 @@
+
 const mongoose = require('mongoose')
 
 const customerSchema = new mongoose.Schema(
@@ -57,6 +58,7 @@ const orderSchema = new mongoose.Schema(
       type: customerSchema,
       required: true,
     },
+
     items: {
       type: [orderItemSchema],
       required: true,
@@ -65,26 +67,46 @@ const orderSchema = new mongoose.Schema(
         message: 'An order must contain at least one item.',
       },
     },
+
     totalAmount: {
       type: Number,
       required: true,
       min: 0,
     },
+
     address: {
       type: String,
       required: true,
       trim: true,
     },
+
     paymentMethod: {
       type: String,
       required: true,
       trim: true,
     },
+
     status: {
       type: String,
+      enum: [
+        'Placed',
+        'Confirmed',
+        'Preparing',
+        'Ready',
+        'Delivered',
+        'Cancelled',
+      ],
       default: 'Placed',
       trim: true,
     },
+
+    // Tracks whether inventory was deducted or restored.
+    inventoryStatus: {
+      type: String,
+      enum: ['not_deducted', 'deducted', 'restored'],
+      default: 'not_deducted',
+    },
+
     idempotencyOperationId: {
       type: String,
       select: false,
@@ -106,4 +128,5 @@ orderSchema.index(
   { unique: true, sparse: true },
 )
 
-module.exports = mongoose.models.Order || mongoose.model('Order', orderSchema)
+module.exports =
+  mongoose.models.Order || mongoose.model('Order', orderSchema)

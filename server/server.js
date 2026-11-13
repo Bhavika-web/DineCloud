@@ -7,6 +7,8 @@ const menuRoutes = require('./routes/menuRoutes')
 const orderRoutes = require('./routes/orderRoutes')
 const Order = require('./models/Order')
 const IdempotencyRecord = require('./models/IdempotencyRecord')
+const authRoutes = require('./routes/authRoutes')
+const adminRoutes = require('./routes/adminRoutes')
 
 dotenv.config()
 
@@ -79,6 +81,8 @@ app.get('/api/health', (req, res) => {
 
 app.use('/api/menu', menuRoutes)
 app.use('/api/orders', orderRoutes)
+app.use('/api/auth', authRoutes)
+app.use('/api/admin', adminRoutes)
 
 app.use((error, req, res, next) => {
   if (res.headersSent) {
