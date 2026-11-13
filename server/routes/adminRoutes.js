@@ -7,6 +7,11 @@ const {
   getDashboardStats,
 } = require('../controllers/adminDashboardController')
 
+// Analytics controller
+const {
+  getAnalytics,
+} = require('../controllers/adminAnalyticsController')
+
 // Order controller
 const {
   getAllOrders,
@@ -39,6 +44,12 @@ router.use(adminAuth)
 router.get('/dashboard', getDashboardStats)
 
 // ========================================
+// ANALYTICS ROUTES
+// ========================================
+
+router.get('/analytics', getAnalytics)
+
+// ========================================
 // ORDER MANAGEMENT ROUTES
 // ========================================
 
@@ -50,11 +61,9 @@ router.patch('/orders/:id/status', updateOrderStatus)
 // INVENTORY MANAGEMENT ROUTES
 // ========================================
 
-// Get all inventory items
 router.get('/inventory', getAllInventory)
 
 // Get low-stock ingredients
-// Keep this before /inventory/:id routes
 router.get('/inventory/low-stock', getLowStockItems)
 
 // Add a new inventory ingredient

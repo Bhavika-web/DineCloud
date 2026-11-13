@@ -15,7 +15,10 @@ const ORDER_STATUSES = [
   'Cancelled',
 ]
 
+// ========================================
 // GET ALL ORDERS
+// ========================================
+
 const getAllOrders = async (req, res, next) => {
   try {
     const orders = await Order.find()
@@ -32,12 +35,16 @@ const getAllOrders = async (req, res, next) => {
   }
 }
 
+
+// ========================================
 // UPDATE ORDER STATUS
+// ========================================
+
 const updateOrderStatus = async (req, res, next) => {
   const { id } = req.params
   const { status } = req.body
 
-  // Validate order ID
+  // Validate order ID.
   if (!mongoose.Types.ObjectId.isValid(id)) {
     return res.status(400).json({
       success: false,
@@ -45,7 +52,7 @@ const updateOrderStatus = async (req, res, next) => {
     })
   }
 
-  // Validate requested status
+  // Validate requested status.
   if (!ORDER_STATUSES.includes(status)) {
     return res.status(400).json({
       success: false,
@@ -53,7 +60,10 @@ const updateOrderStatus = async (req, res, next) => {
     })
   }
 
+  // ========================================
   // CANCELLATION WITH INVENTORY RESTORATION
+  // ========================================
+
   if (status === 'Cancelled') {
     const session = await mongoose.startSession()
 
@@ -70,8 +80,10 @@ const updateOrderStatus = async (req, res, next) => {
           )
         }
 
-        // Final statuses cannot be changed
-        if (['Delivered', 'Cancelled'].includes(order.status)) {
+        // Prevent modifying final orders.
+        if (
+          ['Delivered', 'Cancelled'].includes(order.status)
+        ) {
           throw Object.assign(
             new Error(
               `This order has already been ${order.status.toLowerCase()}. Its status cannot be changed.`,
@@ -80,13 +92,24 @@ const updateOrderStatus = async (req, res, next) => {
           )
         }
 
-        // Restore ingredients deducted when this order was placed
+        // Inventory must have been deducted first.
+        if (order.inventoryStatus !== 'deducted') {
+          throw Object.assign(
+            new Error(
+              'Inventory cannot be restored because it has not been deducted for this order. Manual review is required.',
+            ),
+            { status: 409 },
+          )
+        }
+
+        // Restore previously deducted ingredients.
         await restoreIngredientsForOrder({
           orderId: order._id,
           session,
         })
 
-        // Update order status
+        // Update both order and inventory status.
+        order.inventoryStatus = 'restored'
         order.status = 'Cancelled'
 
         await order.save({ session })
@@ -96,7 +119,8 @@ const updateOrderStatus = async (req, res, next) => {
 
       return res.status(200).json({
         success: true,
-        message: 'Order cancelled and inventory restored successfully.',
+        message:
+          'Order cancelled and inventory restored successfully.',
         order: cancelledOrder,
       })
     } catch (error) {
@@ -113,7 +137,10 @@ const updateOrderStatus = async (req, res, next) => {
     }
   }
 
+  // ========================================
   // NORMAL STATUS UPDATE
+  // ========================================
+
   try {
     const order = await Order.findById(id)
 
@@ -124,11 +151,12 @@ const updateOrderStatus = async (req, res, next) => {
       })
     }
 
-    // Delivered and Cancelled are final statuses
+    // Delivered and Cancelled are final statuses.
     if (['Delivered', 'Cancelled'].includes(order.status)) {
       return res.status(400).json({
         success: false,
-        message: `This order has already been ${order.status.toLowerCase()}. Its status cannot be changed.`,
+        message:
+          `This order has already been ${order.status.toLowerCase()}. Its status cannot be changed.`,
       })
     }
 

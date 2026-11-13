@@ -1,9 +1,13 @@
 
+const mongoose = require('mongoose')
 const Inventory = require('../models/Inventory')
 const InventoryLog = require('../models/InventoryLog')
 
-// Deduct all ingredients required for an order.
-// Must be called inside a MongoDB transaction.
+// ========================================
+// DEDUCT INGREDIENTS FOR AN ORDER
+// Must run inside a MongoDB transaction.
+// ========================================
+
 const deductIngredientsForOrder = async ({
   menuItems,
   orderItems,
@@ -11,17 +15,24 @@ const deductIngredientsForOrder = async ({
   operationId,
   session,
 }) => {
+  if (!session) {
+    throw new Error('MongoDB transaction session is required.')
+  }
+
   const menuItemsById = new Map(
     menuItems.map((item) => [String(item._id), item]),
   )
 
-  // Aggregate ingredient quantities across all ordered menu items.
   const requiredIngredients = new Map()
 
+  // Calculate total ingredient requirements.
   for (const orderItem of orderItems) {
-    const menuItem = menuItemsById.get(String(orderItem.menuItemId))
+    const menuItem = menuItemsById.get(
+      String(orderItem.menuItemId),
+    )
 
-    if (!menuItem || !menuItem.recipe || menuItem.recipe.length === 0) {
+    if (!menuItem || !Array.isArray(menuItem.recipe) ||
+        menuItem.recipe.length === 0) {
       throw Object.assign(
         new Error(
           `Recipe is missing for ${orderItem.name}. Configure its ingredients before accepting orders.`,
@@ -31,12 +42,32 @@ const deductIngredientsForOrder = async ({
     }
 
     for (const ingredient of menuItem.recipe) {
-      const inventoryId = String(ingredient.inventoryItem)
-      const requiredQuantity = ingredient.quantity * orderItem.quantity
-
-      if (!Number.isFinite(requiredQuantity) || requiredQuantity <= 0) {
+      if (
+        !ingredient.inventoryItem ||
+        !mongoose.Types.ObjectId.isValid(
+          ingredient.inventoryItem,
+        )
+      ) {
         throw Object.assign(
-          new Error(`Invalid recipe quantity for ${orderItem.name}.`),
+          new Error(
+            `Invalid inventory reference in recipe for ${orderItem.name}.`,
+          ),
+          { status: 409 },
+        )
+      }
+
+      const inventoryId = String(ingredient.inventoryItem)
+      const requiredQuantity =
+        ingredient.quantity * orderItem.quantity
+
+      if (
+        !Number.isFinite(requiredQuantity) ||
+        requiredQuantity <= 0
+      ) {
+        throw Object.assign(
+          new Error(
+            `Invalid recipe quantity for ${orderItem.name}.`,
+          ),
           { status: 409 },
         )
       }
@@ -54,11 +85,29 @@ const deductIngredientsForOrder = async ({
     }
   }
 
+  // Prevent accidental duplicate deduction for the same order.
+  const existingDeduction = await InventoryLog.findOne({
+    orderId,
+    action: 'deduction',
+  }).session(session)
+
+  if (existingDeduction) {
+    throw Object.assign(
+      new Error(
+        'Inventory has already been deducted for this order.',
+      ),
+      { status: 409 },
+    )
+  }
+
   const logs = []
 
-  // Deduct each ingredient only if sufficient stock exists.
+  // Atomically deduct each ingredient.
   for (const ingredient of requiredIngredients.values()) {
-    if (!Number.isFinite(ingredient.quantity) || ingredient.quantity <= 0) {
+    if (
+      !Number.isFinite(ingredient.quantity) ||
+      ingredient.quantity <= 0
+    ) {
       throw Object.assign(
         new Error('Invalid total ingredient quantity.'),
         { status: 409 },
@@ -71,11 +120,14 @@ const deductIngredientsForOrder = async ({
         currentStock: { $gte: ingredient.quantity },
       },
       {
-        $inc: { currentStock: -ingredient.quantity },
+        $inc: {
+          currentStock: -ingredient.quantity,
+        },
       },
       {
         new: true,
         session,
+        runValidators: true,
       },
     )
 
@@ -118,25 +170,34 @@ const deductIngredientsForOrder = async ({
 }
 
 
-// Restore ingredients when an order is cancelled.
-// Must be called inside the same transaction as the order cancellation.
-const restoreIngredientsForOrder = async ({ orderId, session }) => {
+// ========================================
+// RESTORE INGREDIENTS ON CANCELLATION
+// Must run inside the cancellation transaction.
+// ========================================
+
+const restoreIngredientsForOrder = async ({
+  orderId,
+  session,
+}) => {
+  if (!session) {
+    throw new Error('MongoDB transaction session is required.')
+  }
+
   const deductions = await InventoryLog.find({
     orderId,
     action: 'deduction',
   }).session(session)
 
-  // Never silently cancel an order when its inventory history is missing.
   if (deductions.length === 0) {
     throw Object.assign(
       new Error(
-        'No inventory deduction records were found for this order. Manual review is required before cancellation.',
+        'No inventory deduction records were found for this order. Manual review is required.',
       ),
       { status: 409 },
     )
   }
 
-  // Prevent restoring the same order more than once.
+  // Prevent duplicate restoration.
   const existingRestoration = await InventoryLog.findOne({
     orderId,
     action: 'restoration',
@@ -144,7 +205,9 @@ const restoreIngredientsForOrder = async ({ orderId, session }) => {
 
   if (existingRestoration) {
     throw Object.assign(
-      new Error('Inventory has already been restored for this order.'),
+      new Error(
+        'Inventory has already been restored for this order.',
+      ),
       { status: 409 },
     )
   }
@@ -155,11 +218,14 @@ const restoreIngredientsForOrder = async ({ orderId, session }) => {
     const inventoryItem = await Inventory.findByIdAndUpdate(
       deduction.inventoryItem,
       {
-        $inc: { currentStock: deduction.quantity },
+        $inc: {
+          currentStock: deduction.quantity,
+        },
       },
       {
         new: true,
         session,
+        runValidators: true,
       },
     )
 
@@ -183,9 +249,10 @@ const restoreIngredientsForOrder = async ({ orderId, session }) => {
     })
   }
 
-  await InventoryLog.create(restorationLogs, { session })
+  if (restorationLogs.length > 0) {
+    await InventoryLog.create(restorationLogs, { session })
+  }
 }
-
 
 module.exports = {
   deductIngredientsForOrder,
