@@ -165,7 +165,7 @@ const deductIngredientsForOrder = async ({
   }
 
   if (logs.length > 0) {
-    await InventoryLog.create(logs, { session })
+    await InventoryLog.create(logs, { session, ordered: true })
   }
 }
 

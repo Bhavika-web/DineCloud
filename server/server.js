@@ -99,7 +99,10 @@ app.use((error, req, res, next) => {
     return res.status(409).json({ message: 'A record with the provided value already exists.' })
   }
 
-  console.error('Request failed.', { name: error.name, code: error.code })
+  console.error('Request failed.', {
+    name: error.name,
+    code: error.code,
+  })
   return res.status(500).json({ message: 'An internal server error occurred.' })
 })
 
