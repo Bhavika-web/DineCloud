@@ -1,5 +1,6 @@
 import { ArrowRight, CheckCircle2, CreditCard, MapPin, Utensils } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import EnableOrderNotifications from '../components/EnableOrderNotifications'
 
 const PENDING_ORDER_STORAGE_KEY = 'dinecloud-pending-order-confirmation'
 
@@ -66,6 +67,8 @@ const readConfirmation = () => {
 
     return {
       trackingId: result.trackingId,
+      trackingToken:
+        typeof result.trackingToken === 'string' ? result.trackingToken : '',
       orderId,
       items,
       totalAmount: order.totalAmount,
@@ -163,6 +166,11 @@ function OrderConfirmationPage() {
           </section>
         </div>
       </div>
+
+      <EnableOrderNotifications
+        orderId={confirmation.trackingId}
+        trackingToken={confirmation.trackingToken}
+      />
 
       <Link className="confirmation-menu-button" to="/menu">
         Continue browsing the menu

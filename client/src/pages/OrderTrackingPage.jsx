@@ -4,10 +4,50 @@ import { Link } from 'react-router-dom'
 import http from '../api/http'
 
 const PENDING_ORDER_STORAGE_KEY = 'dinecloud-pending-order-confirmation'
+const TRACKING_CREDENTIAL_STORAGE_PREFIX = 'dinecloud-order-tracking:'
 const OBJECT_ID_PATTERN = /^[a-f\d]{24}$/i
 
 const readTrackingCredentials = () => {
   try {
+    const requestedOrderId = new URLSearchParams(window.location.search).get('orderId')
+    if (requestedOrderId) {
+      if (!OBJECT_ID_PATTERN.test(requestedOrderId)) {
+        return { error: 'The notification tracking link is invalid.' }
+      }
+
+      const trackingId = requestedOrderId.toLowerCase()
+      const storedCredentials = localStorage.getItem(
+        `${TRACKING_CREDENTIAL_STORAGE_PREFIX}${trackingId}`,
+      )
+      if (storedCredentials) {
+        const result = JSON.parse(storedCredentials)
+        if (
+          result &&
+          typeof result === 'object' &&
+          result.trackingId === trackingId &&
+          typeof result.trackingToken === 'string' &&
+          result.trackingToken.trim()
+        ) {
+          return { trackingId, trackingToken: result.trackingToken }
+        }
+      }
+
+      const sessionCredentials = JSON.parse(
+        sessionStorage.getItem(PENDING_ORDER_STORAGE_KEY) || 'null',
+      )
+      if (
+        sessionCredentials?.trackingId?.toLowerCase() === trackingId &&
+        typeof sessionCredentials.trackingToken === 'string' &&
+        sessionCredentials.trackingToken.trim()
+      ) {
+        return { trackingId, trackingToken: sessionCredentials.trackingToken }
+      }
+
+      return {
+        error: 'Tracking details for this notification are not available in this browser.',
+      }
+    }
+
     const storedValue = sessionStorage.getItem(PENDING_ORDER_STORAGE_KEY)
     if (!storedValue) return { error: 'Order tracking details are not available in this browser session.' }
 

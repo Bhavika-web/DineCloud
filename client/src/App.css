@@ -2646,6 +2646,55 @@
   background: var(--color-card);
 }
 
+.notification-opt-in {
+  margin-top: 14px;
+}
+
+.notification-opt-in .tracking-intro {
+  margin: 0;
+}
+
+.notification-action {
+  background: var(--color-card);
+  margin-top: 14px;
+}
+
+.notification-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.notification-feedback {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 10px 0 0;
+}
+
+.foreground-notification {
+  align-items: center;
+  background: #fff3e8;
+  border: 1px solid #f3ddc8;
+  border-radius: 12px;
+  color: var(--color-burgundy-dark);
+  display: flex;
+  font-size: 13px;
+  gap: 14px;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  padding: 12px 15px;
+}
+
+.foreground-notification button {
+  background: transparent;
+  border: 0;
+  color: var(--color-burgundy);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px;
+}
+
 .confirmation-track-button:hover,
 .tracking-refresh-button:hover:not(:disabled),
 .tracking-retry-button:hover:not(:disabled) {

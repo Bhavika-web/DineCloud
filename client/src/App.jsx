@@ -3,6 +3,10 @@ import { useEffect, useState } from 'react'
 import { Route, Routes, Navigate } from 'react-router-dom'
 
 import getMenuItems from './api/menu'
+import {
+  getMessagingServiceWorkerRegistration,
+  subscribeToForegroundMessages,
+} from './firebase/notificationService'
 import CartPanel from './components/CartPanel'
 import Sidebar from './components/Sidebar'
 import TopHeader from './components/TopHeader'
@@ -131,8 +135,132 @@ function SiteLayout() {
 
 
 function App() {
+  const [foregroundNotification, setForegroundNotification] = useState('')
+
+  useEffect(() => {
+    let active = true
+    let unsubscribe
+
+    const showForegroundNotification = async (payload) => {
+      const data = payload.data || {}
+      const title =
+        payload.notification?.title || data.title || 'DineCloud order update'
+      const body =
+        payload.notification?.body ||
+        data.body ||
+        'Your order has a new status update.'
+
+      if (active) setForegroundNotification(body)
+      console.info('[FCM CLIENT] In-app notification displayed.', {
+        orderId: data.orderId,
+        status: data.status,
+        title,
+        body,
+      })
+
+      if (
+        !('Notification' in window) ||
+        !('serviceWorker' in navigator)
+      ) {
+        console.warn(
+          '[FCM CLIENT] Browser notification skipped; Notification or Service Worker API is unavailable.',
+        )
+        return
+      }
+
+      try {
+        const registration = await getMessagingServiceWorkerRegistration()
+        const permission = Notification.permission
+        console.info('[FCM CLIENT] Foreground display state.', {
+          permission,
+          visibilityState: document.visibilityState,
+          workerScope: registration.scope,
+          activeWorkerState: registration.active?.state || 'none',
+        })
+
+        if (document.visibilityState !== 'visible') {
+          console.info(
+            '[FCM CLIENT] Browser notification skipped for a hidden tab; a visible same-origin tab handles display.',
+          )
+          return
+        }
+
+        if (permission !== 'granted') {
+          console.warn(
+            '[FCM CLIENT] Browser notification skipped; permission is not granted.',
+          )
+          return
+        }
+
+        if (!registration.active) {
+          throw new Error('No active Firebase messaging service worker is available.')
+        }
+
+        console.info('[FCM CLIENT] showNotification() attempted.', {
+          orderId: data.orderId,
+          status: data.status,
+        })
+        await registration.showNotification(title, {
+          body,
+          icon: '/favicon.svg',
+          data,
+          tag:
+            data.eventId ||
+            payload.messageId ||
+            `${data.orderId || 'order'}:${data.status || 'update'}`,
+        })
+        console.info('[FCM CLIENT] Foreground browser notification displayed.', {
+          orderId: data.orderId,
+          status: data.status,
+        })
+      } catch (error) {
+        console.error('[FCM CLIENT] Foreground notification display failed.', {
+          name: error.name,
+          code: error.code,
+          message: error.message,
+        })
+      }
+    }
+
+    subscribeToForegroundMessages((payload) => {
+      void showForegroundNotification(payload)
+    })
+      .then((stopListening) => {
+        if (active) unsubscribe = stopListening
+        else stopListening()
+      })
+      .catch((error) => {
+        console.error('[FCM CLIENT] Foreground listener registration failed.', {
+          name: error.name,
+          code: error.code,
+          message: error.message,
+        })
+      })
+
+    console.info('[FCM CLIENT] Root foreground listener mounted.')
+
+    return () => {
+      active = false
+      unsubscribe?.()
+      console.info('[FCM CLIENT] Root foreground listener unmounted.')
+    }
+  }, [])
+
   return (
-    <Routes>
+    <>
+      {foregroundNotification && (
+        <div aria-live="polite" className="foreground-notification" role="status">
+          <span>{foregroundNotification}</span>
+          <button
+            aria-label="Dismiss order notification"
+            onClick={() => setForegroundNotification('')}
+            type="button"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+      <Routes>
 
       {/* Admin Login */}
       <Route path="/admin/login" element={<AdminLogin />} />
@@ -155,7 +283,8 @@ function App() {
       {/* Customer Application */}
       <Route path="/*" element={<SiteLayout />} />
 
-    </Routes>
+      </Routes>
+    </>
   )
 }
 

@@ -5,6 +5,9 @@ const Order = require('../models/Order')
 const {
   restoreIngredientsForOrder,
 } = require('../services/inventoryService')
+const {
+  sendOrderStatusNotification,
+} = require('../services/fcmNotificationService')
 
 const ORDER_STATUSES = [
   'Placed',
@@ -14,6 +17,29 @@ const ORDER_STATUSES = [
   'Delivered',
   'Cancelled',
 ]
+
+const notifyOrderStatusChange = async (order) => {
+  if (!['Preparing', 'Ready', 'Cancelled'].includes(order.status)) return
+
+  try {
+    const result = await sendOrderStatusNotification(order)
+    if (result.failedCount > 0) {
+      console.warn('Some order status notifications could not be sent.', {
+        orderId: String(order._id),
+        status: order.status,
+        failedCount: result.failedCount,
+        removedCount: result.removedCount,
+      })
+    }
+  } catch (error) {
+    console.error('Order status notification failed.', {
+      orderId: String(order._id),
+      status: order.status,
+      name: error.name,
+      code: error.code,
+    })
+  }
+}
 
 // ========================================
 // GET ALL ORDERS
@@ -69,6 +95,7 @@ const updateOrderStatus = async (req, res, next) => {
 
     try {
       let cancelledOrder
+      let previousStatus
 
       await session.withTransaction(async () => {
         const order = await Order.findById(id).session(session)
@@ -109,6 +136,7 @@ const updateOrderStatus = async (req, res, next) => {
         })
 
         // Update both order and inventory status.
+        previousStatus = order.status
         order.inventoryStatus = 'restored'
         order.status = 'Cancelled'
 
@@ -116,6 +144,13 @@ const updateOrderStatus = async (req, res, next) => {
 
         cancelledOrder = order
       })
+
+      console.info('[FCM] Admin changed order status.', {
+        orderId: String(cancelledOrder._id),
+        from: previousStatus,
+        to: 'Cancelled',
+      })
+      await notifyOrderStatusChange(cancelledOrder)
 
       return res.status(200).json({
         success: true,
@@ -160,14 +195,57 @@ const updateOrderStatus = async (req, res, next) => {
       })
     }
 
-    order.status = status
+    if (order.status === status) {
+      return res.status(200).json({
+        success: true,
+        message: `Order status is already ${status}.`,
+        order,
+      })
+    }
 
-    await order.save()
+    const previousStatus = order.status
+    const updatedOrder = await Order.findOneAndUpdate(
+      { _id: id, status: previousStatus },
+      { $set: { status } },
+      { returnDocument: 'after', runValidators: true },
+    )
+
+    if (!updatedOrder) {
+      const currentOrder = await Order.findById(id)
+      if (!currentOrder) {
+        return res.status(404).json({
+          success: false,
+          message: 'Order not found.',
+        })
+      }
+
+      if (currentOrder.status === status) {
+        return res.status(200).json({
+          success: true,
+          message: `Order status is already ${status}.`,
+          order: currentOrder,
+        })
+      }
+
+      return res.status(409).json({
+        success: false,
+        message: 'The order status changed concurrently. Refresh and retry.',
+      })
+    }
+
+    if (previousStatus !== updatedOrder.status) {
+      console.info('[FCM] Admin changed order status.', {
+        orderId: String(updatedOrder._id),
+        from: previousStatus,
+        to: updatedOrder.status,
+      })
+      await notifyOrderStatusChange(updatedOrder)
+    }
 
     return res.status(200).json({
       success: true,
-      message: `Order status updated to ${status}.`,
-      order,
+      message: `Order status updated to ${updatedOrder.status}.`,
+      order: updatedOrder,
     })
   } catch (error) {
     return next(error)

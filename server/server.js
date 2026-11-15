@@ -7,6 +7,7 @@ const menuRoutes = require('./routes/menuRoutes')
 const orderRoutes = require('./routes/orderRoutes')
 const Order = require('./models/Order')
 const IdempotencyRecord = require('./models/IdempotencyRecord')
+const NotificationSubscription = require('./models/NotificationSubscription')
 const authRoutes = require('./routes/authRoutes')
 const adminRoutes = require('./routes/adminRoutes')
 
@@ -111,7 +112,11 @@ const startServer = async () => {
     const configuredOrigins = validateEnvironment()
     configuredOrigins.forEach((origin) => allowedOrigins.add(origin))
     await connectDB()
-    await Promise.all([Order.init(), IdempotencyRecord.init()])
+    await Promise.all([
+      Order.init(),
+      IdempotencyRecord.init(),
+      NotificationSubscription.init(),
+    ])
 
     const port = process.env.PORT || 5000
     const server = app.listen(port, () => {

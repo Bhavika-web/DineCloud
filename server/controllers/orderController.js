@@ -6,6 +6,7 @@ const mongoose = require('mongoose')
 const MenuItem = require('../models/MenuItem')
 const Order = require('../models/Order')
 const IdempotencyRecord = require('../models/IdempotencyRecord')
+const NotificationSubscription = require('../models/NotificationSubscription')
 
 const { deductIngredientsForOrder } = require('../services/inventoryService')
 
@@ -598,6 +599,137 @@ const trackOrder = async (req, res, next) => {
   }
 }
 
+// ========================================
+// REGISTER ORDER NOTIFICATIONS
+// ========================================
+
+const registerOrderNotifications = async (req, res, next) => {
+  const { id: requestedId } = req.params
+
+  if (
+    !/^[a-f\d]{24}$/i.test(requestedId) ||
+    !mongoose.Types.ObjectId.isValid(requestedId)
+  ) {
+    return res.status(400).json({
+      message: 'Invalid order ID.',
+    })
+  }
+
+  const body = req.body
+  if (
+    !body ||
+    typeof body !== 'object' ||
+    Array.isArray(body) ||
+    Object.keys(body).some((field) => field !== 'token')
+  ) {
+    return res.status(400).json({
+      message: 'Request body must contain only an FCM token.',
+    })
+  }
+
+  if (
+    typeof body.token !== 'string' ||
+    !body.token.trim() ||
+    body.token.trim().length > 4096 ||
+    /\s/.test(body.token.trim())
+  ) {
+    return res.status(400).json({
+      message: 'A valid FCM registration token is required.',
+    })
+  }
+
+  const id = requestedId.toLowerCase()
+  const authorization = req.get('Authorization')
+  const match = authorization && authorization.match(/^Bearer\s+(\S+)$/i)
+
+  if (!match) {
+    return res.status(401).json({
+      message: 'A valid order tracking token is required.',
+    })
+  }
+
+  if (!process.env.JWT_SECRET) {
+    return res.status(500).json({
+      message: 'Order tracking is not configured.',
+    })
+  }
+
+  let payload
+  try {
+    payload = jwt.verify(match[1], process.env.JWT_SECRET)
+  } catch {
+    return res.status(401).json({
+      message: 'Invalid or expired order tracking token.',
+    })
+  }
+
+  if (
+    !payload ||
+    typeof payload !== 'object' ||
+    payload.purpose !== 'order-tracking' ||
+    payload.orderId !== id
+  ) {
+    return res.status(401).json({
+      message: 'Invalid or expired order tracking token.',
+    })
+  }
+
+  console.info('[FCM] Token registration received.', { orderId: id })
+
+  try {
+    const orderExists = await Order.exists({ _id: id })
+    if (!orderExists) {
+      return res.status(404).json({
+        message: 'Order not found.',
+      })
+    }
+
+    const updateResult = await NotificationSubscription.updateOne(
+      { orderId: id, token: body.token.trim() },
+      { $setOnInsert: { orderId: id, token: body.token.trim() } },
+      { upsert: true, runValidators: true },
+    )
+
+    const persistedSubscription = await NotificationSubscription.exists({
+      orderId: id,
+      token: body.token.trim(),
+    })
+    if (!updateResult.acknowledged || !persistedSubscription) {
+      throw new Error('Notification subscription persistence could not be verified.')
+    }
+
+    console.info('[FCM] Token subscription saved or already present.', {
+      orderId: id,
+      created: updateResult.upsertedCount > 0,
+    })
+
+    return res.status(200).json({
+      message: 'Order notifications enabled.',
+    })
+  } catch (error) {
+    if (error.code === 11000) {
+      try {
+        const persistedSubscription = await NotificationSubscription.exists({
+          orderId: id,
+          token: body.token.trim(),
+        })
+        if (persistedSubscription) {
+          console.info('[FCM] Existing token subscription confirmed.', {
+            orderId: id,
+          })
+          return res.status(200).json({
+            message: 'Order notifications enabled.',
+          })
+        }
+      } catch (verificationError) {
+        return next(verificationError)
+      }
+    }
+
+    return next(error)
+  }
+}
+
 
 // ========================================
 // EXPORT CONTROLLERS
@@ -606,4 +738,5 @@ const trackOrder = async (req, res, next) => {
 module.exports = {
   placeOrder,
   trackOrder,
+  registerOrderNotifications,
 }
