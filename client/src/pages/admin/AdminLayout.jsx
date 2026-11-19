@@ -5,6 +5,7 @@ import {
   LayoutDashboard,
   ShoppingBag,
   Package,
+  ChartNoAxesCombined,
   LogOut,
   Menu,
   X,
@@ -91,6 +92,17 @@ function AdminLayout() {
           >
             <Package size={19} />
             <span>Inventory Management</span>
+          </NavLink>
+
+          <NavLink
+            to="/admin/analytics"
+            className={({ isActive }) =>
+              `admin-nav-link ${isActive ? "active" : ""}`
+            }
+            onClick={() => setSidebarOpen(false)}
+          >
+            <ChartNoAxesCombined size={19} />
+            <span>Analytics</span>
           </NavLink>
 
         </nav>
