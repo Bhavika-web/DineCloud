@@ -11,6 +11,7 @@ import CartPanel from './components/CartPanel'
 import Sidebar from './components/Sidebar'
 import TopHeader from './components/TopHeader'
 import Inventory from './pages/admin/Inventory'
+import Analytics from './pages/admin/Analytics'
 
 import {
   CheckoutPage,
@@ -278,6 +279,7 @@ function App() {
         <Route path="dashboard" element={<AdminDashboard />} />
         <Route path="orders" element={<OrderManagement />} />
         <Route path="inventory" element={<Inventory />} />
+        <Route path="analytics" element={<Analytics />} />
       </Route>
 
       {/* Customer Application */}

@@ -290,10 +290,7 @@ const getAnalytics = async (req, res) => {
     // 6. Peak ordering hours.
     const peakHoursPipeline = [
       {
-        $match: {
-          ...dateFilter,
-          status: 'Delivered',
-        },
+        $match: dateFilter,
       },
 
       {
@@ -346,6 +343,17 @@ const getAnalytics = async (req, res) => {
       averageOrderValue: 0,
     }
 
+    const revenueByDate = new Map(
+      revenueTrend.map((day) => [day.date, day]),
+    )
+    const completeRevenueTrend = []
+
+    for (let date = startDate; date <= endDate; date = addDays(date, 1)) {
+      completeRevenueTrend.push(
+        revenueByDate.get(date) || { date, revenue: 0, orders: 0 },
+      )
+    }
+
     return res.status(200).json({
       success: true,
 
@@ -356,7 +364,7 @@ const getAnalytics = async (req, res) => {
 
       summary,
       statusBreakdown,
-      revenueTrend,
+      revenueTrend: completeRevenueTrend,
       popularItems,
       peakHours,
     })
